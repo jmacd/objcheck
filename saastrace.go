@@ -10,7 +10,6 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
 	"cloud.google.com/go/storage"
@@ -38,128 +37,69 @@ func init() {
 	fmt.Println("init() done")
 }
 
-type SupportedCheckType int
-
-const (
-	UNSUPPORTED SupportedCheckType = iota + 1
-	GCS
-)
-
-type CheckRequest struct {
-	RequestType    string `json:"endpoint"`
-	NormalizedType SupportedCheckType
-	RequestTarget  string `json:"target"`
-}
-
-func (cr *CheckRequest) normalizeType() {
-	rt := strings.ToLower(cr.RequestType)
-	if rt == "gcs" {
-		cr.NormalizedType = GCS
-	} else {
-		cr.NormalizedType = UNSUPPORTED
-	}
-}
-
-func HTTPCheck(w http.ResponseWriter, r *http.Request) {
-	decoder := json.NewDecoder(r.Body)
-	var cr CheckRequest
-	err := decoder.Decode(&cr)
-	if err != nil {
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.Write([]byte("Data Error"))
-		return
-	}
-
-	status := cr.doCheck()
-
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.Write([]byte(status))
-
-}
-
-func (cr CheckRequest) doCheck() string {
-	cr.normalizeType()
-
-	ctx := context.Background()
-
-	rootSpan, ctx := opentracing.StartSpanFromContext(ctx, "doCheck")
-	defer rootSpan.Finish()
-
-	rootSpan.SetTag("type", cr.RequestType)
-	rootSpan.SetTag("normtype", cr.NormalizedType)
-	rootSpan.SetTag("target", cr.RequestTarget)
-
-	var status string
-
-	switch cr.NormalizedType {
-	case UNSUPPORTED:
-		status = "Unsupported Type"
-	case GCS:
-		status = cr.doGcsCheck(ctx)
-	}
-
-	return status
-}
-
-func (cr CheckRequest) doGcsCheck(ctx context.Context) string {
-	span, ctx := opentracing.StartSpanFromContext(ctx, "doGcsCheck")
-	defer span.Finish()
-
-	client, err := storage.NewClient(ctx)
-	if err != nil {
-		fmt.Printf("client error: %s", err.Error())
-		span.SetTag("error", true)
-		span.LogFields(
-			log.String("event", "client error"),
-			log.String("error", err.Error()),
-		)
-		return "Check Error"
-	}
-
-	bkt := client.Bucket("ls-saastrace-mr")
-
-	obj := bkt.Object(cr.RequestTarget)
-
-	rdr, err := obj.NewReader(ctx)
-	if err != nil {
-		fmt.Printf("obj error: %s", err.Error())
-		span.SetTag("error", true)
-		span.LogFields(
-			log.String("event", "obj error"),
-			log.String("error", err.Error()),
-		)
-		return "Check Error"
-
-	}
-	defer rdr.Close()
-	if _, err := io.Copy(ioutil.Discard, rdr); err != nil {
-		fmt.Printf("io error: %s", err.Error())
-		span.SetTag("error", true)
-		span.LogFields(
-			log.String("event", "io error"),
-			log.String("error", err.Error()),
-		)
-		return "Check Error"
-	}
-
-	return "Check Success"
-}
-
 type ObjCheckRequest struct {
 	Service string `json:"service"`
 	Region  string `json:"region"`
-	Pool    string `json:"pool"`
-	Count   string `json:"count"`
+	Pool    int    `json:"pool"`
+	Count   int    `json:"count"`
+}
+
+func (ocr ObjCheckRequest) validate() error {
+	if ocr.Service != "gcs" {
+		return errors.New("Bad service")
+	}
+
+	if ocr.Region != "us-central1" {
+		return errors.New("Bad region")
+	}
+
+	if ocr.Pool != 10 {
+		return errors.New("Bad pool")
+	}
+
+	if ocr.Count < 1 || ocr.Count > 1000 {
+		return errors.New("Bad count")
+	}
+
+	return nil
 }
 
 func ObjCheck(w http.ResponseWriter, r *http.Request) {
+	ctx := context.Background()
+	span, ctx := opentracing.StartSpanFromContext(ctx, "ObjCheck")
+	defer span.Finish()
+
 	decoder := json.NewDecoder(r.Body)
 	var ocr ObjCheckRequest
 	err := decoder.Decode(&ocr)
 	if err != nil {
+		span.SetTag("error", true)
+		span.LogEvent(err.Error())
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.Write([]byte("Data Error"))
 		return
+	}
+
+	err = ocr.validate()
+	if err != nil {
+		span.SetTag("error", true)
+		span.LogEvent(err.Error())
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Write([]byte("Request Error"))
+		return
+	}
+
+	objList, err := createObjList(ctx, ocr.Pool, ocr.Count, "1k")
+	if err != nil {
+		span.SetTag("error", true)
+		span.LogEvent(err.Error())
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Write([]byte("List Error"))
+		return
+	}
+
+	for _, obj := range objList {
+		requestObject(ctx, "objcheck-uscentral-1", obj)
 	}
 
 }
@@ -171,6 +111,8 @@ func createObjList(ctx context.Context, poolSize int, count int, size string) ([
 	var objects []string
 
 	if poolSize <= 0 {
+		span.SetTag("error", true)
+		span.LogEvent("Bad pool size")
 		return objects, errors.New("Bad pool size")
 	}
 	rand.Seed(time.Now().UnixNano())
@@ -182,4 +124,47 @@ func createObjList(ctx context.Context, poolSize int, count int, size string) ([
 	}
 
 	return objects, nil
+}
+
+func requestObject(ctx context.Context, bucket string, object string) {
+	span, ctx := opentracing.StartSpanFromContext(ctx, "requestObject")
+	defer span.Finish()
+
+	client, err := storage.NewClient(ctx)
+	if err != nil {
+		fmt.Printf("client error: %s", err.Error())
+		span.SetTag("error", true)
+		span.LogFields(
+			log.String("event", "client error"),
+			log.String("error", err.Error()),
+		)
+		return
+	}
+
+	bkt := client.Bucket(bucket)
+
+	obj := bkt.Object(object)
+
+	rdr, err := obj.NewReader(ctx)
+	if err != nil {
+		fmt.Printf("obj error: %s", err.Error())
+		span.SetTag("error", true)
+		span.LogFields(
+			log.String("event", "obj error"),
+			log.String("error", err.Error()),
+		)
+		return
+	}
+
+	defer rdr.Close()
+
+	if _, err := io.Copy(ioutil.Discard, rdr); err != nil {
+		fmt.Printf("io error: %s", err.Error())
+		span.SetTag("error", true)
+		span.LogFields(
+			log.String("event", "io error"),
+			log.String("error", err.Error()),
+		)
+		return
+	}
 }
