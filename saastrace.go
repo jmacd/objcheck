@@ -37,6 +37,11 @@ func init() {
 	fmt.Println("init() done")
 }
 
+var bucketRegions = map[string]bool{
+	"us-centra1": true,
+	"us-east1":   true,
+}
+
 type ObjCheckRequest struct {
 	Service string `json:"service"`
 	Region  string `json:"region"`
@@ -46,15 +51,15 @@ type ObjCheckRequest struct {
 
 func (ocr ObjCheckRequest) validate() error {
 	if ocr.Service != "gcs" {
-		return errors.New("Bad service")
+		return errors.New(fmt.Sprintf("Bad service %v", ocr.Service))
 	}
 
-	if ocr.Region != "us-central1" {
-		return errors.New("Bad region")
+	if !bucketRegions[ocr.Region] {
+		return errors.New(fmt.Sprintf("Bad region %v", ocr.Region))
 	}
 
 	if ocr.Pool != 10 {
-		return errors.New("Bad pool")
+		return errors.New(fmt.Sprintf("Bad pool %v", ocr.Pool))
 	}
 
 	if ocr.Count < 1 || ocr.Count > 1000 {
@@ -98,8 +103,8 @@ func ObjCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	for _, obj := range objList {
-		requestObject(ctx, "objcheck-uscentral-1", obj)
+	for idx, obj := range objList {
+		requestObject(ctx, "objcheck-us-central1", obj, idx)
 	}
 
 }
@@ -126,13 +131,17 @@ func createObjList(ctx context.Context, poolSize int, count int, size string) ([
 	return objects, nil
 }
 
-func requestObject(ctx context.Context, bucket string, object string) {
+func requestObject(ctx context.Context, bucket string, object string, idx int) {
 	span, ctx := opentracing.StartSpanFromContext(ctx, "requestObject")
 	defer span.Finish()
 
+	span.SetTag("bucket", bucket)
+	span.SetTag("object", object)
+	span.SetTag("seq", idx)
+
 	client, err := storage.NewClient(ctx)
 	if err != nil {
-		fmt.Printf("client error: %s", err.Error())
+		fmt.Printf("client error: %v\n", err.Error())
 		span.SetTag("error", true)
 		span.LogFields(
 			log.String("event", "client error"),
@@ -147,7 +156,7 @@ func requestObject(ctx context.Context, bucket string, object string) {
 
 	rdr, err := obj.NewReader(ctx)
 	if err != nil {
-		fmt.Printf("obj error: %s", err.Error())
+		fmt.Printf("obj error: %s for %v\n", err.Error(), object)
 		span.SetTag("error", true)
 		span.LogFields(
 			log.String("event", "obj error"),
@@ -159,7 +168,7 @@ func requestObject(ctx context.Context, bucket string, object string) {
 	defer rdr.Close()
 
 	if _, err := io.Copy(ioutil.Discard, rdr); err != nil {
-		fmt.Printf("io error: %s", err.Error())
+		fmt.Printf("io error: %v for %v\n", err.Error(), object)
 		span.SetTag("error", true)
 		span.LogFields(
 			log.String("event", "io error"),
