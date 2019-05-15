@@ -38,8 +38,8 @@ func init() {
 }
 
 var bucketRegions = map[string]bool{
-	"us-centra1": true,
-	"us-east1":   true,
+	"us-central1": true,
+	"us-east1":    true,
 }
 
 type ObjCheckRequest struct {
@@ -103,8 +103,10 @@ func ObjCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	bucket := fmt.Sprintf("objcheck-%v", ocr.Region)
+
 	for idx, obj := range objList {
-		requestObject(ctx, "objcheck-us-central1", obj, idx)
+		requestObject(ctx, bucket, obj, idx)
 	}
 
 }
