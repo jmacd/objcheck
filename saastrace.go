@@ -19,6 +19,8 @@ import (
 	"github.com/opentracing/opentracing-go/mocktracer"
 )
 
+// init on Cloud Function startup, initializes the LightStep tracer from environment variables
+// or uses OpenTracing mocktracer
 func init() {
 	token := os.Getenv("LS_API_KEY")
 
@@ -37,29 +39,32 @@ func init() {
 	fmt.Println("init() done")
 }
 
+// bucketRegions map contains supported bucket region names
 var bucketRegions = map[string]bool{
 	"us-central1": true,
 	"us-east1":    true,
 }
 
-type ObjCheckRequest struct {
+// objCheckRequest holds cloud storage performance check parameters
+type objCheckRequest struct {
 	Service string `json:"service"`
 	Region  string `json:"region"`
 	Pool    int    `json:"pool"`
 	Count   int    `json:"count"`
 }
 
-func (ocr ObjCheckRequest) validate() error {
+// Validate validates the requested check for service, region, pool, and count of objects to request
+func (ocr objCheckRequest) validate() error {
 	if ocr.Service != "gcs" {
-		return errors.New(fmt.Sprintf("Bad service %v", ocr.Service))
+		return fmt.Errorf("Bad service %v", ocr.Service)
 	}
 
 	if !bucketRegions[ocr.Region] {
-		return errors.New(fmt.Sprintf("Bad region %v", ocr.Region))
+		return fmt.Errorf("Bad region %v", ocr.Region)
 	}
 
 	if ocr.Pool != 10 {
-		return errors.New(fmt.Sprintf("Bad pool %v", ocr.Pool))
+		return fmt.Errorf("Bad pool %v", ocr.Pool)
 	}
 
 	if ocr.Count < 1 || ocr.Count > 1000 {
@@ -69,13 +74,15 @@ func (ocr ObjCheckRequest) validate() error {
 	return nil
 }
 
+// ObjCheck measures the latency to fetch objects from pools in different regions in Google Cloud Storage
+// triggered by HTTP requests to the deployed Google Cloud Function endpoint
 func ObjCheck(w http.ResponseWriter, r *http.Request) {
 	ctx := context.Background()
 	span, ctx := opentracing.StartSpanFromContext(ctx, "ObjCheck")
 	defer span.Finish()
 
 	decoder := json.NewDecoder(r.Body)
-	var ocr ObjCheckRequest
+	var ocr objCheckRequest
 	err := decoder.Decode(&ocr)
 	if err != nil {
 		span.SetTag("error", true)
@@ -111,6 +118,7 @@ func ObjCheck(w http.ResponseWriter, r *http.Request) {
 
 }
 
+// createObjList creates a list of random object keys given a pool and a number of objects to fetch
 func createObjList(ctx context.Context, poolSize int, count int, size string) ([]string, error) {
 	span, ctx := opentracing.StartSpanFromContext(ctx, "createObjList")
 	defer span.Finish()
@@ -133,6 +141,8 @@ func createObjList(ctx context.Context, poolSize int, count int, size string) ([
 	return objects, nil
 }
 
+// requestObject uses the Google Cloud Storage SDK to read an object from a bucket
+// It reads all the data for the object but throws aways the actual contents
 func requestObject(ctx context.Context, bucket string, object string, idx int) {
 	span, ctx := opentracing.StartSpanFromContext(ctx, "requestObject")
 	defer span.Finish()
