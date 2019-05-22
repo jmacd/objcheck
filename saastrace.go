@@ -41,8 +41,9 @@ func init() {
 
 // bucketRegions map contains supported bucket region names
 var bucketRegions = map[string]bool{
-	"us-central1": true,
-	"us-east1":    true,
+	"us-central1":  true,
+	"us-east1":     true,
+	"europe-west2": true,
 }
 
 // objCheckRequest holds cloud storage performance check parameters

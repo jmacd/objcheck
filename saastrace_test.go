@@ -44,6 +44,12 @@ func TestObjCheckRequestValidate(t *testing.T) {
 		t.Errorf("Unexpected error %v\n", err.Error())
 	}
 
+	ocr = &objCheckRequest{Service: "gcs", Region: "europe-west2", Pool: 10, Count: 1}
+	err = ocr.validate()
+	if err != nil {
+		t.Errorf("Unexpected error %v\n", err.Error())
+	}
+
 	ocr = &objCheckRequest{Service: "gcs", Region: "us-central1", Pool: 10, Count: 1000}
 	err = ocr.validate()
 	if err != nil {
