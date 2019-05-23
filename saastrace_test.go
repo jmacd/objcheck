@@ -38,6 +38,12 @@ func TestObjCheckRequestValidate(t *testing.T) {
 		t.Errorf("Unexpected error %v\n", err.Error())
 	}
 
+	ocr = &objCheckRequest{Service: "s3", Region: "us-east-2", Pool: 10, Count: 1}
+	err = ocr.validate()
+	if err != nil {
+		t.Errorf("Unexpected error %v\n", err.Error())
+	}
+
 	ocr = &objCheckRequest{Service: "gcs", Region: "us-central1", Pool: 10, Count: 1}
 	err = ocr.validate()
 	if err != nil {
@@ -56,11 +62,19 @@ func TestObjCheckRequestValidate(t *testing.T) {
 		t.Errorf("Unexpected error %v\n", err.Error())
 	}
 
+	ocr = &objCheckRequest{Service: "bb", Region: "us-east1", Pool: 10, Count: 1}
+	err = ocr.validate()
+	if err == nil {
+		t.Error("Missing error for bad service")
+	} else if err.Error() != "Bad service bb" {
+		t.Errorf("Incorrect error for bad service %v", err.Error())
+	}
+
 	ocr = &objCheckRequest{Service: "s3", Region: "us-east1", Pool: 10, Count: 1}
 	err = ocr.validate()
 	if err == nil {
 		t.Error("Missing error for bad service")
-	} else if err.Error() != "Bad service s3" {
+	} else if err.Error() != "Bad service / region combination: s3 and us-east1" {
 		t.Errorf("Incorrect error for bad service %v", err.Error())
 	}
 
