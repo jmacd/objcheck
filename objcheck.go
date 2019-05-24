@@ -1,4 +1,4 @@
-package saastrace
+package objcheck
 
 import (
 	"context"
@@ -17,6 +17,9 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
+
+	"github.com/lightstep/lightstep-tracer-go/lightstepoc"
+	"go.opencensus.io/trace"
 
 	"github.com/lightstep/lightstep-tracer-go"
 	"github.com/opentracing/opentracing-go"
@@ -39,6 +42,26 @@ func init() {
 			Tags:        opentracing.Tags{"region": os.Getenv("FUNCTION_REGION")},
 		})
 		opentracing.SetGlobalTracer(tracer)
+
+		exporterOptions := []lightstepoc.Option{
+			lightstepoc.WithAccessToken(token),
+			lightstepoc.WithSatelliteHost("collector.lightstep.com"),
+			lightstepoc.WithSatellitePort(443),
+			lightstepoc.WithInsecure(false),
+			lightstepoc.WithComponentName("start-oc"),
+		}
+
+		// defer exporter.Close(context.Background()) // Don't think this works w/ Cloud Function lifecycles
+
+		exporter, err := lightstepoc.NewExporter(exporterOptions...)
+
+		if err != nil {
+			fmt.Printf("lightstepoc.NewExporter failed: %v", err.Error())
+		} else {
+			trace.RegisterExporter(exporter)
+
+			trace.ApplyConfig(trace.Config{DefaultSampler: trace.AlwaysSample()})
+		}
 	}
 
 	fmt.Println("init() done")
@@ -208,13 +231,17 @@ func requestObject(ctx context.Context, service string, region string, bucket st
 		}
 	} else if service == "s3" {
 		sess := session.Must(session.NewSession())
+
 		svc := s3.New(sess, &aws.Config{
-			Region: aws.String(region),
+			Region:       aws.String(region),
+			UseDualStack: aws.Bool(true),
 		})
+
 		result, err := svc.GetObjectWithContext(ctx, &s3.GetObjectInput{
 			Bucket: aws.String(bucket),
 			Key:    aws.String(object),
 		})
+
 		if err != nil {
 			fmt.Printf("obj error: %s for %v\n", err.Error(), object)
 			span.SetTag("error", true)

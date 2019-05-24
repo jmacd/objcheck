@@ -1,4 +1,4 @@
-package saastrace
+package objcheck
 
 import (
 	"context"
